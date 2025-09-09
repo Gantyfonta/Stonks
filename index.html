@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fake Stock Game</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8;--green:#16a34a;--red:#ef4444}
+    *{box-sizing:border-box;font-family:Inter,ui-sans-serif,system-ui,Arial}
+    body{margin:0;min-height:100vh;background:linear-gradient(180deg,var(--bg),#071029);color:#e6eef6;padding:18px}
+    h1{margin:0 0 8px;font-size:20px}
+    .wrap{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:1fr 360px;gap:18px}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));padding:14px;border-radius:12px;box-shadow:0 6px 18px rgba(2,6,23,0.6)}
+    canvas{width:100%;height:260px;background:#031024;border-radius:8px;display:block}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .controls > *{padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit}
+    input[type=range]{width:160px}
+    .stat{display:flex;justify-content:space-between;margin:8px 0;font-size:14px}
+    .stat strong{font-weight:700}
+    .btn{cursor:pointer}
+    .btn.primary{background:var(--accent);color:#02111a;border:none}
+    .green{color:var(--green)}.red{color:var(--red)}
+    table{width:100%;border-collapse:collapse;margin-top:10px}
+    th,td{padding:6px 8px;text-align:left;font-size:13px;border-bottom:1px solid rgba(255,255,255,0.03)}
+    .small{font-size:12px;color:var(--muted)}
+    .row{display:flex;gap:12px}
+    .grow{flex:1}
+    footer{margin-top:18px;text-align:center;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Fake Stock Game — Demo</h1>
+      <div class="small">A randomized stock price simulator. Buy low, sell high, or just watch the chaos.</div>
+
+      <canvas id="chart" width="800" height="300"></canvas>
+
+      <div class="controls">
+        <button id="step" class="btn">Step</button>
+        <button id="play" class="btn primary">Auto Play</button>
+        <button id="reset" class="btn">Reset</button>
+
+        <div style="display:flex;align-items:center;gap:8px">
+          <label class="small">Volatility</label>
+          <input id="vol" type="range" min="0" max="0.1" step="0.001" value="0.02">
+          <span id="volVal" class="small">0.02</span>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:8px">
+          <label class="small">Drift</label>
+          <input id="drift" type="range" min="-0.01" max="0.02" step="0.0005" value="0.000">
+          <span id="driftVal" class="small">0.000</span>
+        </div>
+
+      </div>
+
+      <div class="row" style="margin-top:8px">
+        <div class="grow">
+          <div class="stat"><span>Price</span><strong id="price">$100.00</strong></div>
+          <div class="stat"><span>Time</span><span id="time">0</span></div>
+          <div class="stat"><span>Last Move</span><span id="move" class="small">—</span></div>
+        </div>
+        <div style="width:240px">
+          <div class="stat"><span>Cash</span><strong id="cash">$10,000.00</strong></div>
+          <div class="stat"><span>Shares</span><strong id="shares">0</strong></div>
+          <div class="stat"><span>Net Worth</span><strong id="net">$10,000.00</strong></div>
+
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button id="buy" class="btn">Buy 1</button>
+            <button id="sell" class="btn">Sell 1</button>
+            <button id="buyAll" class="btn">Buy Max</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <table>
+          <thead><tr><th>Step</th><th>Price</th><th>Action</th></tr></thead>
+          <tbody id="history"></tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <div class="card">
+      <h1>Settings & Leaderboard</h1>
+      <div class="small">Tweak randomness and save/load games to local storage.</div>
+
+      <div style="margin-top:10px">
+        <label class="small">Seed (optional)</label>
+        <input id="seed" placeholder="random seed" style="width:100%;padding:8px;border-radius:8px;margin-top:6px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit">
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="save" class="btn">Save Game</button>
+          <button id="load" class="btn">Load Game</button>
+          <button id="clear" class="btn">Clear Save</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <h2 style="font-size:14px;margin:0 0 8px">Leaderboard (top net worth)</h2>
+        <ol id="leaders" class="small" style="padding-left:18px;margin:0"></ol>
+      </div>
+
+      <footer>Local save only — no real money. Built for fun.</footer>
+    </div>
+  </div>
+
+<script>
+// --- Simple fake stock simulator ---
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+let W = canvas.width, H = canvas.height;
+
+// State
+let state = {
+  price: 100,
+  t: 0,
+  vol: parseFloat(document.getElementById('vol').value),
+  drift: parseFloat(document.getElementById('drift').value),
+  cash: 10000,
+  shares: 0,
+  history: [],
+  rngSeed: null,
+};
+
+// RNG with optional seed (mulberry32)
+function createRng(seed){
+  if(seed == null) seed = Math.floor(Math.random()*1e9);
+  state.rngSeed = seed;
+  let t = seed >>> 0;
+  return function(){
+    t += 0x6D2B79F5 | 0;
+    var r = Math.imul(t ^ t >>> 15, 1 | t);
+    r = (r + Math.imul(r ^ r >>> 7, 61 | r)) ^ r;
+    return ((r ^ r >>> 14) >>> 0) / 4294967296;
+  }
+}
+let rng = createRng(null);
+
+function gauss(){
+  // Box-Muller using rng
+  let u = 0, v = 0;
+  while(u === 0) u = rng();
+  while(v === 0) v = rng();
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+}
+
+function stepOnce(){
+  const dt = 1; // one step unit
+  const vol = state.vol;
+  const drift = state.drift;
+  const z = gauss();
+  // geometric brownian-ish
+  const factor = Math.exp((drift - 0.5 * vol * vol) * dt + vol * Math.sqrt(dt) * z);
+  const old = state.price;
+  state.price = Math.max(0.01, state.price * factor);
+  state.t += 1;
+  const pct = ((state.price - old) / old * 100).toFixed(2);
+  state.history.push({t: state.t, price: state.price, move: pct + '%'});
+  if(state.history.length > 200) state.history.shift();
+  updateUI(pct);
+}
+
+// UI bindings
+const priceEl = document.getElementById('price');
+const timeEl = document.getElementById('time');
+const cashEl = document.getElementById('cash');
+const sharesEl = document.getElementById('shares');
+const netEl = document.getElementById('net');
+const historyEl = document.getElementById('history');
+const moveEl = document.getElementById('move');
+const volInput = document.getElementById('vol');
+const driftInput = document.getElementById('drift');
+const volVal = document.getElementById('volVal');
+const driftVal = document.getElementById('driftVal');
+
+volInput.addEventListener('input', ()=>{ state.vol = parseFloat(volInput.value); volVal.textContent = state.vol });
+driftInput.addEventListener('input', ()=>{ state.drift = parseFloat(driftInput.value); driftVal.textContent = state.drift });
+
+function updateUI(pct){
+  priceEl.textContent = '$' + state.price.toFixed(2);
+  timeEl.textContent = state.t;
+  moveEl.textContent = (pct>0?'+':'') + pct;
+  cashEl.textContent = '$' + state.cash.toFixed(2);
+  sharesEl.textContent = state.shares;
+  netEl.textContent = '$' + (state.cash + state.shares * state.price).toFixed(2);
+  renderChart();
+  renderHistory();
+}
+
+function renderHistory(){
+  historyEl.innerHTML = '';
+  for(let i = state.history.length-1; i>=0; i--){
+    const row = state.history[i];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${row.t}</td><td>$${row.price.toFixed(2)}</td><td>${row.move}</td>`;
+    historyEl.appendChild(tr);
+  }
+}
+
+// Chart
+function renderChart(){
+  ctx.clearRect(0,0,W,H);
+  // background grid
+  ctx.fillStyle = '#031024';
+  ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for(let i=0;i<4;i++){
+    ctx.beginPath();ctx.moveTo(0,H*(i+1)/5);ctx.lineTo(W,H*(i+1)/5);ctx.stroke();
+  }
+  // price line
+  const data = state.history.length?state.history.map(h=>h.price):[state.price];
+  const pad = 20;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = Math.max(1e-6, max-min);
+  ctx.beginPath();
+  for(let i=0;i<data.length;i++){
+    const x = pad + (W-2*pad) * (i/(Math.max(1,data.length-1)));
+    const y = H - pad - (H-2*pad) * ((data[i]-min)/range);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.lineWidth = 2.6;
+  ctx.strokeStyle = state.history.length && state.history[state.history.length-1].price >= data[0] ? '#2dd4bf' : '#fb7185';
+  ctx.stroke();
+  // latest price marker
+  const last = data[data.length-1];
+  const lastX = pad + (W-2*pad) * ((data.length-1)/(Math.max(1,data.length-1)));
+  const lastY = H - pad - (H-2*pad) * ((last-min)/range);
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();ctx.arc(lastX,lastY,4,0,Math.PI*2);ctx.fill();
+  // axis labels
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '12px system-ui';
+  ctx.fillText('$' + max.toFixed(2), 6, 14);
+  ctx.fillText('$' + min.toFixed(2), 6, H-6);
+}
+
+// Actions
+document.getElementById('step').addEventListener('click', ()=>{ stepOnce(); saveAutos(); });
+let playing = false; let playInterval = null;
+document.getElementById('play').addEventListener('click', ()=>{
+  playing = !playing;
+  const btn = document.getElementById('play');
+  if(playing){ btn.textContent='Stop'; playInterval = setInterval(()=>{ stepOnce(); saveAutos(); }, 600); }
+  else { btn.textContent='Auto Play'; clearInterval(playInterval); }
+});
+
+// buy/sell
+document.getElementById('buy').addEventListener('click', ()=>{ if(state.cash >= state.price){ state.cash -= state.price; state.shares += 1; addAction('Bought 1'); updateUI('0.00'); saveAutos(); saveToLocal(); } });
+document.getElementById('sell').addEventListener('click', ()=>{ if(state.shares > 0){ state.cash += state.price; state.shares -= 1; addAction('Sold 1'); updateUI('0.00'); saveAutos(); saveToLocal(); } });
+document.getElementById('buyAll').addEventListener('click', ()=>{ const max = Math.floor(state.cash / state.price); if(max<=0) return; state.shares += max; state.cash -= max*state.price; addAction('Bought '+max); updateUI('0.00'); saveAutos(); saveToLocal(); });
+
+function addAction(text){ state.history.push({t: state.t, price: state.price, move: text}); if(state.history.length>200) state.history.shift(); }
+
+// save/load
+function saveToLocal(){
+  const payload = JSON.stringify({state:{price:state.price,t:state.t,vol:state.vol,drift:state.drift,cash:state.cash,shares:state.shares,history:state.history,seed:state.rngSeed}});
+  localStorage.setItem('fake-stock-save', payload);
+  updateLeaders();
+}
+function loadFromLocal(){
+  const raw = localStorage.getItem('fake-stock-save');
+  if(!raw) return false;
+  try{
+    const j = JSON.parse(raw);
+    const s = j.state;
+    state.price = s.price; state.t = s.t; state.vol = s.vol; state.drift = s.drift; state.cash = s.cash; state.shares = s.shares; state.history = s.history||[]; if(s.seed) rng = createRng(s.seed);
+    updateUI('0.00');
+    return true;
+  }catch(e){return false}
+}
+
+document.getElementById('save').addEventListener('click', ()=>{ saveToLocal(); alert('Saved to local storage.'); });
+document.getElementById('load').addEventListener('click', ()=>{ const ok = loadFromLocal(); alert(ok? 'Loaded save.':'No save found.'); });
+document.getElementById('clear').addEventListener('click', ()=>{ localStorage.removeItem('fake-stock-save'); alert('Save cleared.'); updateLeaders(); });
+
+document.getElementById('reset').addEventListener('click', ()=>{ resetState(); saveAutos(); });
+
+document.getElementById('seed').addEventListener('change', (e)=>{ const v = e.target.value.trim(); if(v){ rng = createRng(hashString(v)); } else { rng = createRng(null); } });
+
+function resetState(){
+  state.price = 100; state.t=0; state.vol = parseFloat(volInput.value); state.drift = parseFloat(driftInput.value); state.cash = 10000; state.shares = 0; state.history = [];
+  rng = createRng(state.rngSeed || Math.floor(Math.random()*1e9));
+  updateUI('0.00');
+}
+
+// small hash for seed
+function hashString(str){ let h=2166136261; for(let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h += (h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24); } return h >>> 0; }
+
+// leaderboard
+function updateLeaders(){
+  const raw = localStorage.getItem('fake-stock-leaders');
+  let leaders = raw?JSON.parse(raw):[];
+  const current = {when:Date.now(), net: state.cash + state.shares * state.price};
+  leaders.push(current);
+  leaders = leaders.sort((a,b)=>b.net - a.net).slice(0,5);
+  localStorage.setItem('fake-stock-leaders', JSON.stringify(leaders));
+  const ol = document.getElementById('leaders'); ol.innerHTML = '';
+  leaders.forEach(l=>{ const li = document.createElement('li'); li.textContent = '$'+l.net.toFixed(2)+' — '+(new Date(l.when)).toLocaleString(); ol.appendChild(li); });
+}
+
+// autosave on some actions
+function saveAutos(){ localStorage.setItem('fake-stock-autosave', JSON.stringify({price:state.price,t:state.t,vol:state.vol,drift:state.drift,cash:state.cash,shares:state.shares,history:state.history,seed:state.rngSeed})); }
+
+// try to load autosave on start
+(function init(){
+  const raw = localStorage.getItem('fake-stock-autosave');
+  if(raw){ try{ const j = JSON.parse(raw); state.price = j.price; state.t = j.t; state.vol = j.vol; state.drift = j.drift; state.cash = j.cash; state.shares = j.shares; state.history = j.history||[]; if(j.seed) rng = createRng(j.seed); }catch(e){} }
+  updateUI('0.00');
+  updateLeaders();
+})();
+
+// handle resize
+window.addEventListener('resize', ()=>{ W = canvas.width = canvas.clientWidth * devicePixelRatio; H = canvas.height = canvas.clientHeight * devicePixelRatio; renderChart(); });
+// initialize pixel ratio
+W = canvas.width = canvas.clientWidth * devicePixelRatio || 800; H = canvas.height = canvas.clientHeight * devicePixelRatio || 300;
+renderChart();
+
+</script>
+</body>
+</html>
